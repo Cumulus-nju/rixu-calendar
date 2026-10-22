@@ -71,6 +71,7 @@
   let lastAIErrorAt = 0;
   let aiKeyAvailable = false;
   let aiTesting = false;
+  let appVersion = '0.1.1';
   let reminderTimer = null;
   let napcatSyncedThisSession = false;
   let lastNapcatStatus = '';
@@ -945,7 +946,7 @@
 
       '<section class="settings-section"><div class="section-head"><h2>关于</h2><p>日序 · 把聊天里的约定，收进日程。</p></div><div class="settings-body">' +
       '<div class="about-block"><strong>本地优先</strong>剪贴板监听、规则识别、日历数据都在本机完成。微信 / QQ 的本地数据库是加密的，日序不做内存注入或解密，因此采用“复制消息即识别”的安全通道；NapCat 接入是可选项。<br><br>' +
-      '版本 <code>v0.1.0</code> · 数据格式 1 · <button class="btn-text" data-action="open-onboarding" style="display:inline;height:auto;padding:0;color:var(--accent)">再看一次使用说明</button></div>' +
+      '版本 <code>v' + esc(appVersion) + '</code> · 数据格式 1 · <button class="btn-text" data-action="open-onboarding" style="display:inline;height:auto;padding:0;color:var(--accent)">再看一次使用说明</button></div>' +
       '</div></section></div>';
   }
 
@@ -1372,13 +1373,14 @@
     opts = opts || {};
     const raw = P.normalizeText(opts.text || '');
     if (!raw) return { added: 0, pending: 0, ignored: 0, noSchedule: 1, error: '消息为空' };
-    if (!opts.force) {
+    if (!opts.force && !opts.copyEvent) {
       const h = hashString(raw);
       if (data.meta.hashes && data.meta.hashes.includes(h)) {
         return { added: 0, pending: 0, ignored: 0, noSchedule: 0, duplicate: true };
       }
       rememberHash(h);
     } else {
+      // 一次真实的复制动作允许重复入历：删错了重新复制就能加回来。
       rememberHash(hashString(raw));
     }
 
@@ -2156,6 +2158,9 @@
     }
 
     captureOn = !!data.settings.captureEnabled;
+    if (IS_DESKTOP && bridge.getVersion) {
+      try { appVersion = (await bridge.getVersion()) || appVersion; } catch { /* ignore */ }
+    }
     if (IS_DESKTOP && bridge.aiAvailable) {
       try { aiKeyAvailable = !!(await bridge.aiAvailable()); } catch { aiKeyAvailable = false; }
     }
@@ -2173,7 +2178,8 @@
       ingest({
         text: payload.text,
         atISO: payload.at ? new Date(payload.at).toISOString() : new Date().toISOString(),
-        origin: 'clipboard'
+        origin: 'clipboard',
+        copyEvent: !!payload.copyEvent
       }).catch(function () {});
     });
 

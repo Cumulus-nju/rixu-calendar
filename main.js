@@ -91,22 +91,55 @@ function updateTrayTooltip() {
   if (tray) tray.setToolTip(captureEnabled ? '日序 · 正在采集' : '日序 · 已暂停');
 }
 
+// Windows 每次“复制”都会让剪贴板序号 +1，即使复制的是同一段文字。
+// 用它区分“用户又复制了一次”和“剪贴板里还留着旧内容”，后者不应该重复入历。
+let clipboardSeqFn = null;
+let clipboardSeqTried = false;
+let lastSeq = 0;
+
+function getClipboardSequence() {
+  if (!clipboardSeqTried) {
+    clipboardSeqTried = true;
+    if (process.platform === 'win32') {
+      try {
+        const koffi = require('koffi');
+        const user32 = koffi.load('user32.dll');
+        clipboardSeqFn = user32.func('uint32_t __stdcall GetClipboardSequenceNumber()');
+        clipboardSeqFn(); // 预热，避免第一次调用失败
+      } catch (err) {
+        console.warn('clipboard sequence unavailable, falling back to text diff:', err && err.message);
+        clipboardSeqFn = null;
+      }
+    }
+  }
+  if (!clipboardSeqFn) return 0;
+  try { return clipboardSeqFn(); } catch { return 0; }
+}
+
 function startCapture() {
   stopCapture();
   lastClipboard = safeReadClipboard();
+  lastSeq = getClipboardSequence();
   captureTimer = setInterval(() => {
     if (!captureEnabled || !mainWindow || mainWindow.isDestroyed()) return;
     const text = safeReadClipboard().trim();
-    if (!text || text === lastClipboard) return;
+    if (!text) return;
+    const seqReady = !!clipboardSeqFn;
+    const seq = seqReady ? getClipboardSequence() : 0;
+    const copied = seqReady ? seq !== lastSeq : text !== lastClipboard;
+    if (seqReady) lastSeq = seq;
+    if (!copied) return;
     lastClipboard = text;
     if (text.length > 4000) return;
     const looksRelevant = Parser.looksAICandidate || Parser.looksScheduleLike;
     if (!looksRelevant(text)) return;
-    const hash = hashText(text);
-    if (hash === lastHash) return;
-    lastHash = hash;
-    mainWindow.webContents.send('capture:text', { text, at: Date.now() });
-  }, 1200);
+    if (!seqReady) {
+      const hash = hashText(text);
+      if (hash === lastHash) return;
+      lastHash = hash;
+    }
+    mainWindow.webContents.send('capture:text', { text, at: Date.now(), copyEvent: seqReady });
+  }, 900);
 }
 
 function stopCapture() {
