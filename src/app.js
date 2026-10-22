@@ -71,7 +71,7 @@
   let lastAIErrorAt = 0;
   let aiKeyAvailable = false;
   let aiTesting = false;
-  let appVersion = '0.1.1';
+  let appVersion = '0.1.2';
   let reminderTimer = null;
   let napcatSyncedThisSession = false;
   let lastNapcatStatus = '';

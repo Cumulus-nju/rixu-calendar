@@ -188,3 +188,53 @@ test('开头是日期时间时不误判为发送人', () => {
   assert.equal(r.messages[0].sender, '');
   assert.match(r.messages[0].text, /^2026年10月24日 14:30/);
 });
+
+test('排课条目：课程名 + 点号日期 + 时间段（无关键词）', () => {
+  const e = ev('气候学基础，2026.11.5 10:10-12:10');
+  assert.ok(e);
+  assert.equal(e.title, '气候学基础');
+  assert.equal(e.start, '2026-11-05T10:10');
+  assert.equal(e.end, '2026-11-05T12:10');
+  assert.equal(e.location, '');
+});
+
+test('排课条目：日期在前也能识别', () => {
+  const e = ev('2026.11.5 10:10-12:10 气候学基础');
+  assert.ok(e);
+  assert.equal(e.title, '气候学基础');
+  assert.equal(e.start, '2026-11-05T10:10');
+});
+
+test('排课条目：无年份的点号日期', () => {
+  const e = ev('大学英语 11.7 10:10-12:10');
+  assert.ok(e);
+  assert.equal(e.title, '大学英语');
+  assert.equal(e.start, '2026-11-07T10:10');
+});
+
+test('排课条目：教室编号不进入标题', () => {
+  assert.equal(ev('Python程序设计 2026.11.5 8:00-9:40 3号楼302').title, 'Python程序设计');
+  assert.equal(ev('高等数学 2026.11.5 8:00-9:40 教2-101').title, '高等数学');
+  assert.equal(ev('大学物理 2026.11.6 10:10-12:10 苏教A108').title, '大学物理');
+});
+
+test('没有事件名时不会把“有空”当日程', () => {
+  assert.equal(ev('明天下午3点有空'), null);
+});
+
+test('只有日期时间没有标题时不生成日程', () => {
+  assert.equal(ev('2026.11.5 10:10-12:10'), null);
+});
+
+test('单行消息里的时间冒号不会被当成发送人', () => {
+  const r = P.parseMessages('气候学基础，2026.11.5 10:10-12:10');
+  assert.equal(r.messages.length, 1);
+  assert.equal(r.messages[0].sender, '');
+  assert.match(r.messages[0].text, /10:10-12:10/);
+});
+
+test('普通“发送人：正文”仍然识别', () => {
+  const r = P.parseMessages('张老师：明天下午3点开会');
+  assert.equal(r.messages[0].sender, '张老师');
+  assert.equal(r.messages[0].text, '明天下午3点开会');
+});

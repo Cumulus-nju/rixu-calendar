@@ -316,13 +316,42 @@
   function stripSchedulePhrases(s) {
     return s
       .replace(/(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号]?/g, ' ')
+      .replace(/\d{4}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{1,2}/g, ' ')
+      .replace(/(?<!\d)\d{1,2}\s*[./]\s*\d{1,2}(?!\d)/g, ' ')
       .replace(/(?:大后天|大后日|后天|明晚|明日|明天|今晚|今日|今天|后晚)/g, ' ')
       .replace(/(?:(?:这|本|下下|下)\s*)?(?:周|星期|礼拜)\s*[一二三四五六日天1-7]/g, ' ')
       .replace(/(?:这个?)?周末/g, ' ')
       .replace(/(?:凌晨|清晨|早上|上午|中午|下午|傍晚|晚上|夜里)\s*/g, ' ')
       .replace(/(?:\d{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*(?:点|时)\s*(?:半|一刻|三刻|\d{1,2}\s*分?)?/g, ' ')
       .replace(/\d{1,2}\s*[:：]\s*\d{2}/g, ' ')
-      .replace(/\d{1,2}\s*[日号]\s*/g, ' ');
+      .replace(/\d{1,2}\s*[日号]\s*(?![\s]*(?:楼|室|门|院|床|桌|口|线|站|车|馆))/g, ' ');
+  }
+
+  // 没有“开会 / 讲座”等关键词，但消息里有明确日期 + 时间段时，
+  // 把日期时间之外的内容当作标题（例如“气候学基础，2026.11.5 10:10-12:10”）。
+  var IMPLICIT_TITLE_BLOCK_RE = /^(?:有空|没空|没事|好的?|收到|可以|不行|不知道|在吗|行|嗯|哦|到时候|见面|再说|随便|看情况|不确定|待定)/;
+  var LOCATION_TOKEN_RE = /^(?:[\u4e00-\u9fa5A-Za-z0-9]{1,12}(?:会议室|教室|办公室|报告厅|体育馆|图书馆|食堂|操场|礼堂|实验室|医院|诊所|卫生室|楼|室|馆|场|校区|门口)[\u4e00-\u9fa5A-Za-z0-9]{0,6}|[\u4e00-\u9fa5]{1,4}[A-Za-z]{1,3}\d{2,4})$/;
+
+  function implicitTitle(text) {
+    var s = cleanForTitle(text);
+    s = stripSchedulePhrases(s);
+    // 教室编号（教2-101 / A108 之类）不是标题
+    s = s.replace(/[A-Za-z\u4e00-\u9fa5]{0,4}\d{1,3}\s*[-－—]\s*\d{1,4}/g, ' ');
+    s = s.replace(/[，。；！？、,.;:：!?\-—~～\/\\|()[\]{}]+/g, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+    if (!s) return '';
+    var parts = s.split(' ');
+    // 去掉结尾的地点词（“体育课 体育馆” → “体育课”）
+    if (parts.length > 1 && LOCATION_TOKEN_RE.test(parts[parts.length - 1])) {
+      parts.pop();
+      s = parts.join(' ').trim();
+    } else if (LOCATION_TOKEN_RE.test(s)) {
+      return '';
+    }
+    if (s.length < 2) return '';
+    if (/^(?:我|你|他|她|它|我们|你们|他们|大家)/.test(s)) return '';
+    if (IMPLICIT_TITLE_BLOCK_RE.test(s)) return '';
+    return s.slice(0, 20);
   }
 
   function findEvent(text) {
@@ -471,7 +500,13 @@
     var dateInfo = parseDate(text, now);
     var event = findEvent(text);
     var timeInfo = parseTime(text, dateInfo ? dateInfo.periodHint : null);
+    var implicit = '';
     var notice = !event && !!(dateInfo && timeInfo && hasNoticeMeta(text));
+    if (!event && !notice && dateInfo && timeInfo) {
+      // 排课 / 日程条目：没有关键词和结构化字段，但“日期 + 时间 + 标题”齐全。
+      implicit = implicitTitle(text);
+      if (implicit) notice = true;
+    }
     if (!event && !notice) return null;
     if (!event) {
       event = { key: 'notice', strong: true, duration: 60, deadline: false, phrase: '', index: 0 };
@@ -502,7 +537,7 @@
       end = new Date(start.getTime() + duration * 60000);
     }
 
-    var title = notice ? noticeTitle(text) : buildTitle(text, event);
+    var title = notice ? (implicit || noticeTitle(text)) : buildTitle(text, event);
     var location = findLocation(text);
     var note = notice ? noticeNote(text) : '';
 
@@ -558,6 +593,8 @@
     if (hasEvent && (hasDate || hasTime)) return true;
     // 通知 / 海报格式：没有“开会 / 讲座”等词，但时间、地点、主讲人等字段齐全。
     if (hasDate && hasTime && hasNoticeMeta(text)) return true;
+    // 排课 / 日程条目：日期 + 时间 + 标题即可。
+    if (hasDate && hasTime && implicitTitle(text)) return true;
     return false;
   }
 
@@ -579,6 +616,15 @@
       /^\d{1,2}\s*[月./-]\s*\d{1,2}/.test(s) ||
       /^\d{1,2}\s*[:：]\s*\d{2}/.test(s) ||
       /^\d{4}\s*年/.test(s);
+  }
+
+  function isLikelySender(s) {
+    s = String(s || '').trim();
+    if (!s || s.length > 12) return false;
+    if (/[\d，。；、,;:：]/.test(s)) return false;
+    if (/[年月日号周星期]/.test(s)) return false;
+    if (/^(?:https?|www)$/i.test(s)) return false;
+    return true;
   }
 
   function parseMessages(raw, options) {
@@ -631,7 +677,7 @@
         continue;
       }
       var wm = line.match(wxSender);
-      if (wm && !metaSender.test(wm[1].trim()) && !isTimeLikePrefix(wm[1].trim()) && !/^https?$/i.test(wm[1].trim())) {
+      if (wm && isLikelySender(wm[1]) && !metaSender.test(wm[1].trim()) && !isTimeLikePrefix(wm[1].trim())) {
         if (current) messages.push(current);
         current = { sender: wm[1].trim(), at: '', lines: [wm[2]] };
         continue;
