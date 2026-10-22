@@ -30,10 +30,35 @@
     "start": "electron .",
     "test": "node --test test/*.test.js",
     "screenshot": "electron . --screenshot",
-    "shortcut": "powershell -ExecutionPolicy Bypass -File tools/create-shortcut.ps1"
+    "shortcut": "powershell -ExecutionPolicy Bypass -File tools/create-shortcut.ps1",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.cumulusnju.rixu",
+    "productName": "日序",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "assets/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Rixu-${version}-portable.exe"
+    }
   },
   "devDependencies": {
-    "electron": "33.4.11"
+    "electron": "33.4.11",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "ws": "^8.22.0"

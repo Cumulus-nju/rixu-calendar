@@ -1,4 +1,5 @@
 node_modules/
+release/
 tools/_edge_profile/
 tools/_edge_fresh/
 _probe_tmp/

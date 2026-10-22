@@ -17,7 +17,17 @@
 
 ![待确认](docs/inbox.png)
 
-## 快速开始（Windows）
+## 下载即用（Windows，免安装）
+
+不想折腾 Node.js？直接下载最新版：
+
+**[⬇ Rixu-portable.exe](https://github.com/Cumulus-nju/rixu-calendar/releases/latest)**（约 70 MB，单文件，双击即可运行）
+
+首次启动会引导你填自己的 DeepSeek API Key；也可以先跳过，用本地规则识别。
+
+> 这是未签名的 exe，Windows SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」即可。程序不联网读取你的聊天，数据只存在本机。
+
+## 从源码运行（Windows）
 
 需要 [Node.js](https://nodejs.org/) 18 或更高版本。
 
@@ -130,6 +140,7 @@ npm install --include=dev
 npm test          # 解析器单元测试
 npm start         # 启动应用
 npm run screenshot  # 无头截图
+npm run dist        # 打包 Windows 免安装 exe 到 release/
 ```
 
 > 如果你的环境设置了 `NODE_ENV=production`，安装时务必带 `--include=dev`，否则 Electron 不会装上。
