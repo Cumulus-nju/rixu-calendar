@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('rixu', {
   loadData: () => ipcRenderer.invoke('data:load'),
   saveData: (data) => ipcRenderer.invoke('data:save', data),
   setCaptureEnabled: (enabled) => ipcRenderer.invoke('capture:set-enabled', enabled),
+  captureReady: () => ipcRenderer.invoke('capture:ready'),
   readClipboard: () => ipcRenderer.invoke('capture:read'),
   takeClipboard: () => ipcRenderer.invoke('capture:take'),
   notify: (payload) => ipcRenderer.invoke('notify', payload),

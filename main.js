@@ -147,6 +147,24 @@ function stopCapture() {
   captureTimer = null;
 }
 
+// 日序没运行时复制的消息，启动后补识别一次。
+// 交给渲染层按 hash 去重：识别过的旧内容不会重复入历。
+let startupClipboardChecked = false;
+
+function checkStartupClipboard() {
+  if (startupClipboardChecked) return false;
+  startupClipboardChecked = true;
+  if (!captureEnabled || !mainWindow || mainWindow.isDestroyed()) return false;
+  const text = safeReadClipboard().trim();
+  if (!text || text.length > 4000) return false;
+  const looksRelevant = Parser.looksAICandidate || Parser.looksScheduleLike;
+  if (!looksRelevant(text)) return false;
+  lastClipboard = text;
+  lastSeq = getClipboardSequence();
+  mainWindow.webContents.send('capture:text', { text, at: Date.now(), copyEvent: false, startup: true });
+  return true;
+}
+
 function setCapture(enabled) {
   captureEnabled = !!enabled;
   broadcastCaptureState();
@@ -806,6 +824,8 @@ ipcMain.handle('data:save', (_event, data) => {
 });
 
 ipcMain.handle('capture:set-enabled', (_event, enabled) => setCapture(enabled));
+
+ipcMain.handle('capture:ready', () => checkStartupClipboard());
 
 ipcMain.handle('capture:read', () => {
   const text = safeReadClipboard();

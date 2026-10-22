@@ -71,7 +71,7 @@
   let lastAIErrorAt = 0;
   let aiKeyAvailable = false;
   let aiTesting = false;
-  let appVersion = '0.1.2';
+  let appVersion = '0.1.3';
   let reminderTimer = null;
   let napcatSyncedThisSession = false;
   let lastNapcatStatus = '';
@@ -2182,6 +2182,11 @@
         copyEvent: !!payload.copyEvent
       }).catch(function () {});
     });
+
+    // 告诉主进程“渲染层已就绪”，让它在启动时补识别一次剪贴板里的未读内容。
+    if (IS_DESKTOP && bridge.captureReady) {
+      bridge.captureReady().catch(function () {});
+    }
 
     bridge.onCaptureState(function (state) {
       if (!state) return;
