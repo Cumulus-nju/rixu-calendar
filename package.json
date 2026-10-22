@@ -1,0 +1,41 @@
+{
+  "name": "rixu-calendar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "日序 — 把微信 / QQ 聊天里的约定，自动收进极简日历（Electron）",
+  "main": "main.js",
+  "license": "MIT",
+  "author": "Cumulus-nju",
+  "homepage": "https://github.com/Cumulus-nju/rixu-calendar#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cumulus-nju/rixu-calendar.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cumulus-nju/rixu-calendar/issues"
+  },
+  "keywords": [
+    "calendar",
+    "electron",
+    "wechat",
+    "qq",
+    "deepseek",
+    "schedule",
+    "chinese"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "screenshot": "electron . --screenshot",
+    "shortcut": "powershell -ExecutionPolicy Bypass -File tools/create-shortcut.ps1"
+  },
+  "devDependencies": {
+    "electron": "33.4.11"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}
