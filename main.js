@@ -1,12 +1,13 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Tray, Notification, clipboard, dialog, ipcMain, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, Notification, clipboard, dialog, ipcMain, nativeImage, safeStorage, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 const Parser = require('./src/parser');
+const { SyncEngine } = require('./src/sync-engine');
 
 const APP_NAME = '日序';
 const isScreenshot = process.argv.includes('--screenshot');
@@ -63,6 +64,100 @@ function writeData(data) {
   fs.writeFileSync(tmp, body, 'utf8');
   fs.renameSync(tmp, file);
   return true;
+}
+
+/* ---------------- 账号与同步 ---------------- */
+
+function syncStateFile() {
+  return path.join(app.getPath('userData'), 'sync-state.json');
+}
+
+function readSyncStateFile() {
+  try {
+    const file = syncStateFile();
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\ufeff/, ''));
+  } catch (err) {
+    console.error('read sync state failed', err);
+    return null;
+  }
+}
+
+function writeSyncStateFile(state) {
+  const file = syncStateFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function encryptText(text) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('safeStorage unavailable');
+  return safeStorage.encryptString(text).toString('base64');
+}
+
+function decryptText(blob) {
+  return safeStorage.decryptString(Buffer.from(String(blob), 'base64'));
+}
+
+const syncEngine = new SyncEngine({
+  readData: readData,
+  writeData: writeData,
+  dataExists: () => fs.existsSync(dataFile()),
+  readState: readSyncStateFile,
+  writeState: writeSyncStateFile,
+  encrypt: encryptText,
+  decrypt: decryptText,
+  log: function () {
+    const args = Array.prototype.slice.call(arguments);
+    console.warn.apply(console, ['[sync]'].concat(args));
+  },
+  onApplied: function (data, summary) {
+    sendToRenderer('sync:applied', { data: data, summary: summary });
+  }
+});
+
+const SYNC_INTERVAL_MS = 60000;
+const SYNC_STARTUP_DELAY_MS = 6000;
+const SYNC_AFTER_SAVE_MS = 8000;
+let syncIntervalTimer = null;
+let syncSaveTimer = null;
+let syncStartupTimer = null;
+
+function syncAutoEnabled() {
+  const status = syncEngine.status();
+  return !!(status.configured && status.signedIn);
+}
+
+function runSync(reason) {
+  if (!syncAutoEnabled() || syncEngine.syncing) return Promise.resolve(null);
+  return syncEngine.syncNow(reason).then((result) => {
+    if (result && result.ok) {
+      sendToRenderer('sync:status', syncEngine.status());
+    } else if (result && result.error) {
+      sendToRenderer('sync:status', syncEngine.status());
+    }
+    return result;
+  }).catch(() => null);
+}
+
+function scheduleSyncAfterSave() {
+  if (!syncAutoEnabled()) return;
+  if (syncSaveTimer) clearTimeout(syncSaveTimer);
+  syncSaveTimer = setTimeout(() => { syncSaveTimer = null; runSync('local-change'); }, SYNC_AFTER_SAVE_MS);
+}
+
+function startSyncLoop() {
+  if (syncIntervalTimer) clearInterval(syncIntervalTimer);
+  syncIntervalTimer = setInterval(() => { runSync('timer'); }, SYNC_INTERVAL_MS);
+  if (syncStartupTimer) clearTimeout(syncStartupTimer);
+  syncStartupTimer = setTimeout(() => { syncStartupTimer = null; runSync('startup'); }, SYNC_STARTUP_DELAY_MS);
+}
+
+function stopSyncLoop() {
+  if (syncIntervalTimer) { clearInterval(syncIntervalTimer); syncIntervalTimer = null; }
+  if (syncStartupTimer) { clearTimeout(syncStartupTimer); syncStartupTimer = null; }
+  if (syncSaveTimer) { clearTimeout(syncSaveTimer); syncSaveTimer = null; }
 }
 
 function safeReadClipboard() {
@@ -634,6 +729,7 @@ app.whenReady().then(() => {
   createWindow();
   buildTray();
   startCapture();
+  startSyncLoop();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -648,6 +744,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   quitting = true;
   stopCapture();
+  stopSyncLoop();
   napcat.enabled = false;
   napcat.manualStop = true;
   closeNapcatSocket();
@@ -820,7 +917,41 @@ ipcMain.handle('data:save', (_event, data) => {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('invalid data');
   }
-  return writeData(data);
+  const ok = writeData(data);
+  scheduleSyncAfterSave();
+  return ok;
+});
+
+ipcMain.handle('sync:status', () => syncEngine.status());
+
+ipcMain.handle('sync:configure', async (_event, payload) => {
+  const result = await syncEngine.configure(payload);
+  sendToRenderer('sync:status', syncEngine.status());
+  return result;
+});
+
+ipcMain.handle('sync:signin', async (_event, payload) => {
+  const result = await syncEngine.signIn(payload);
+  sendToRenderer('sync:status', syncEngine.status());
+  return result;
+});
+
+ipcMain.handle('sync:signup', async (_event, payload) => {
+  const result = await syncEngine.signUp(payload);
+  sendToRenderer('sync:status', syncEngine.status());
+  return result;
+});
+
+ipcMain.handle('sync:signout', () => {
+  const result = syncEngine.signOut();
+  sendToRenderer('sync:status', result.status);
+  return result;
+});
+
+ipcMain.handle('sync:now', async () => {
+  const result = await syncEngine.syncNow('manual');
+  sendToRenderer('sync:status', syncEngine.status());
+  return result;
 });
 
 ipcMain.handle('capture:set-enabled', (_event, enabled) => setCapture(enabled));
