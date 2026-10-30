@@ -1,6 +1,6 @@
 {
   "name": "rixu-calendar",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "日序 — 把微信 / QQ 聊天里的约定，自动收进极简日历（Electron）",
   "main": "main.js",

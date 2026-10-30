@@ -1998,16 +1998,72 @@ input, textarea, select {
   line-height: 1.7;
 }
 
-.folder-suggestions {
+.folder-detect-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 9px 0 2px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 0 7px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.02em;
 }
 
-.folder-suggestions .btn-ghost {
+.folder-detect-head .btn-text { font-size: 9px; }
+
+.folder-suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.folder-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--surface-bright);
+}
+
+.folder-suggestion-main { min-width: 0; }
+
+.folder-suggestion-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.folder-suggestion-title strong {
+  font-size: 10.5px;
+  font-weight: 570;
+}
+
+.folder-status {
+  padding: 1px 6px;
+  border-radius: 20px;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.folder-status.has { background: #e9ebe3; color: var(--sage); }
+.folder-status.empty { background: #f0ede4; color: var(--faint); }
+
+.folder-suggestion-path {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 8.5px;
+  word-break: break-all;
+}
+
+.folder-suggestion .btn-ghost {
+  flex: 0 0 auto;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 9px;
   font-size: 9.5px;
 }
 

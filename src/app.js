@@ -89,7 +89,7 @@
   let lastAIErrorAt = 0;
   let aiKeyAvailable = false;
   let aiTesting = false;
-  let appVersion = '0.4.0';
+  let appVersion = '0.4.1';
   let reminderTimer = null;
   let napcatSyncedThisSession = false;
   let lastNapcatStatus = '';
@@ -97,7 +97,6 @@
   let syncStatus = { configured: false, signedIn: false, syncing: false, email: '', lastSyncAt: '', lastError: '', url: '' };
   let syncBusy = false;
   let syncEditingServer = false;
-  let syncPendingData = null;
   let lastImportedId = '';
   let folderSync = { configured: false, enabled: false, folder: '', syncing: false, lastSyncAt: '', lastError: '', calendarId: '' };
   let folderBusy = false;
@@ -651,12 +650,6 @@
   function closeModal() {
     modalState = null;
     renderModal();
-    // 同步结果在弹窗打开时先存着，等用户关掉弹窗再换数据，避免打字打到一半被刷新。
-    if (syncPendingData) {
-      const next = syncPendingData;
-      syncPendingData = null;
-      applySyncedData(next);
-    }
   }
 
   function showToast(opts) {
@@ -1051,19 +1044,34 @@
     return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;
   }
 
+  function folderSuggestionHTML(item, disabled) {
+    const has = !!item.hasCalendar;
+    const status = item.conflict
+      ? '同步文件需要检查'
+      : has
+        ? (item.eventCount ? '已有日历 · ' + item.eventCount + ' 项日程' : '已有日历')
+        : '还没有日历，点右边新建';
+    const label = item.conflict ? '连接并检查' : has ? '连接已有日历' : '在这里新建';
+    return '<div class="folder-suggestion"><div class="folder-suggestion-main"><div class="folder-suggestion-title"><strong>' + esc(item.label) + '</strong>' +
+      '<span class="folder-status ' + (has ? 'has' : 'empty') + '">' + esc(status) + '</span></div>' +
+      '<div class="folder-suggestion-path">' + esc(item.path) + '</div></div>' +
+      '<button class="btn-ghost" data-action="folder-use" data-path="' + esc(item.path) + '" ' + (disabled ? 'disabled' : '') + '>' +
+      icon(has ? 'link' : 'folder', 12) + ' ' + label + '</button></div>';
+  }
+
   function folderSectionHTML() {
     const st = folderSync || {};
     const supabaseSignedIn = !!(syncStatus && syncStatus.signedIn);
     if (!st.configured) {
       const suggestions = Array.isArray(folderSuggestions) ? folderSuggestions : [];
       return '<div class="llm-box folder-box"><p class="folder-lead">把日程放进 OneDrive / 坚果云 的同步文件夹，两台电脑选同一个文件夹就行。不用账号，也不经过日序的服务器。</p>' +
-        (suggestions.length ? '<div class="folder-suggestions">' + suggestions.map((item) =>
-          '<button class="btn-ghost" data-action="folder-use" data-path="' + esc(item.path) + '" ' + (supabaseSignedIn ? 'disabled' : '') + '>' +
-          icon('folder', 12) + ' 使用 ' + esc(item.label) + '</button>'
-        ).join('') + '</div>' : '') +
-        '<div class="settings-actions"><button class="btn-ghost" data-action="folder-pick" ' + (supabaseSignedIn ? 'disabled' : '') + '>' + icon('folder', 12) + ' 选择文件夹…</button></div>' +
+        '<div class="folder-detect-head"><span>检测到的同步盘</span><button class="btn-text" data-action="folder-refresh">重新检测</button></div>' +
+        (suggestions.length
+          ? '<div class="folder-suggestion-list">' + suggestions.map((item) => folderSuggestionHTML(item, supabaseSignedIn)).join('') + '</div>'
+          : '<p class="llm-note">没有检测到 OneDrive / 坚果云。可以点下面的「选择其他文件夹…」，选你同步盘里的文件夹；也可以先装一个云盘客户端。</p>') +
+        '<div class="settings-actions"><button class="btn-ghost" data-action="folder-pick" ' + (supabaseSignedIn ? 'disabled' : '') + '>' + icon('folder', 12) + ' 选择其他文件夹…</button></div>' +
         (supabaseSignedIn ? '<p class="llm-note warn">当前已登录 Supabase。两种同步方式二选一：先退出 Supabase，再启用文件夹同步。</p>' : '') +
-        '<p class="llm-note">文件夹里会生成 <code>rixu-sync.json</code>（明文 JSON）。API Key 和 NapCat Token 不会写进去；云盘服务商能看到这个文件。建议单独建一个「日序」文件夹。</p></div>';
+        '<p class="llm-note">不用打开资源管理器：点「在这里新建」会自动创建「日序」文件夹；第二台电脑等云盘把文件夹同步下来，看到「已有日历」再点连接。文件夹里会生成 <code>rixu-sync.json</code>（明文 JSON）；API Key 和 NapCat Token 不会写进去。</p></div>';
     }
     const enabled = !!st.enabled;
     const canSync = enabled && !st.syncing && !folderBusy;
@@ -2759,6 +2767,9 @@
       case 'folder-pick':
         pickFolder();
         break;
+      case 'folder-refresh':
+        refreshFolderSuggestions();
+        break;
       case 'folder-use':
         if (attrPath) configureFolder(attrPath, false);
         break;
@@ -2943,6 +2954,9 @@
     if (!next || demoPreview) return;
     data = normalizeData(next);
     render();
+    // 同步引擎已经写过盘；这里再存一次，确保渲染层内存里的版本和磁盘一致，
+    // 避免之后一次旧的内存保存把刚拉下来的条目覆盖掉。
+    saveNow();
   }
 
   /* ---------------- 同步文件夹 ---------------- */
@@ -3013,6 +3027,24 @@
     } catch (err) {
       showToast({ type: 'error', title: '选择文件夹失败', body: String(err && err.message || err) });
     }
+  }
+
+  async function refreshFolderSuggestions() {
+    if (!IS_DESKTOP) return;
+    try {
+      folderSuggestions = (await bridge.folderDetect()) || [];
+    } catch (err) {
+      folderSuggestions = [];
+    }
+    if (view === 'settings') render();
+    const found = folderSuggestions.filter((item) => item.hasCalendar).length;
+    showToast({
+      title: '已重新检测',
+      body: folderSuggestions.length
+        ? (found ? '找到 ' + found + ' 个已有日历的同步位置。' : '找到 ' + folderSuggestions.length + ' 个同步盘位置。')
+        : '没有检测到 OneDrive / 坚果云，可以手动选择文件夹。',
+      timeout: 2800
+    });
   }
 
   async function folderNowRun() {
@@ -3169,7 +3201,10 @@
   function runConfirm(confirm, id) {
     if (!confirm) return;
     if (confirm === 'folder-join') {
-      if (id) configureFolder(id, true);
+      if (id) {
+        closeModal();
+        configureFolder(id, true);
+      }
     } else if (confirm === 'delete-series') {
       if (id) endSeries(id);
     } else if (confirm === 'clear-data' || confirm === 'clear-demo') {
@@ -3405,7 +3440,6 @@
 
     bridge.onSyncApplied(function (payload) {
       if (!payload || !payload.data || demoPreview) return;
-      if (modalState) { syncPendingData = payload.data; return; }
       applySyncedData(payload.data);
       const summary = payload.summary || {};
       if (summary.pulled > 0) {
@@ -3421,7 +3455,6 @@
 
     bridge.onFolderApplied(function (payload) {
       if (!payload || !payload.data || demoPreview) return;
-      if (modalState) { syncPendingData = payload.data; return; }
       applySyncedData(payload.data);
       const summary = payload.summary || {};
       if (summary.pulled > 0) {

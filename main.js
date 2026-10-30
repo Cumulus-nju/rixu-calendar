@@ -9,6 +9,7 @@ const WebSocket = require('ws');
 const Parser = require('./src/parser');
 const { SyncEngine } = require('./src/sync-engine');
 const { FolderSyncEngine } = require('./src/folder-sync-engine');
+const folderSyncCore = require('./src/folder-sync-core');
 
 const APP_NAME = '日序';
 const isScreenshot = process.argv.includes('--screenshot');
@@ -180,7 +181,41 @@ function folderSuggestions() {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+  }).map((item) => Object.assign({}, item, inspectSyncFolder(item.path)));
+}
+
+// 让设置页能直接显示「这个同步盘里有没有日历」，用户不用打开资源管理器。
+function inspectSyncFolder(folder) {
+  const info = { exists: false, hasCalendar: false, eventCount: 0, calendarId: '', conflict: false };
+  try {
+    if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) return info;
+    info.exists = true;
+    const files = fs.readdirSync(folder).filter((name) => folderSyncCore.isSnapshotFile(name));
+    if (!files.length) return info;
+    info.hasCalendar = true;
+    const snapshots = [];
+    for (const name of files) {
+      try {
+        snapshots.push({
+          name: name,
+          data: JSON.parse(fs.readFileSync(path.join(folder, name), 'utf8').replace(/^\ufeff/, ''))
+        });
+      } catch (err) {
+        info.conflict = true;
+      }
+    }
+    const merged = folderSyncCore.mergeSnapshots(snapshots);
+    if (!merged.ok || merged.warnings.length) info.conflict = true;
+    if (merged.ok) {
+      info.calendarId = merged.calendarId || '';
+      info.eventCount = merged.rows.filter(function (row) {
+        return row.kind === 'event' && !row.deleted;
+      }).length;
+    }
+  } catch (err) {
+    info.conflict = true;
+  }
+  return info;
 }
 
 const SYNC_INTERVAL_MS = 60000;
