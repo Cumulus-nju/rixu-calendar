@@ -13,6 +13,7 @@ const folderSyncCore = require('./src/folder-sync-core');
 
 const APP_NAME = '日序';
 const isScreenshot = process.argv.includes('--screenshot');
+const startHidden = process.argv.includes('--hidden');
 const iconPath = path.join(__dirname, 'assets', 'icon.png');
 
 if (process.env.RIXU_USER_DATA) {
@@ -826,7 +827,7 @@ function createWindow() {  mainWindow = new BrowserWindow({
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'), { query });
 
   mainWindow.once('ready-to-show', () => {
-    if (!isScreenshot) mainWindow.show();
+    if (!isScreenshot && !startHidden) mainWindow.show();
   });
 
   mainWindow.on('close', (e) => {
@@ -1203,25 +1204,43 @@ ipcMain.handle('app:set-close-to-tray', (_event, value) => {
   return closeToTray;
 });
 
+// 便携版是在临时目录里解压运行的，直接用 process.execPath 会指向临时文件，
+// 重启后路径就没了。electron-builder 的 portable 目标会提供包装 exe 的路径。
+function loginItemOptions(enabled) {
+  const opts = { openAtLogin: !!enabled };
+  const portableFile = String(process.env.PORTABLE_EXECUTABLE_FILE || '').trim();
+  if (portableFile) {
+    if (!fs.existsSync(portableFile)) throw new Error('找不到便携版程序文件，重新下载或换一个位置再设置。');
+    opts.path = portableFile;
+    opts.args = ['--hidden'];
+  } else if (!app.isPackaged) {
+    opts.path = process.execPath;
+    opts.args = [app.getAppPath(), '--hidden'];
+  } else {
+    // 安装版用默认的 process.execPath；加 --hidden 让它开机后静默驻留托盘。
+    opts.args = ['--hidden'];
+  }
+  return opts;
+}
+
 ipcMain.handle('app:set-login-item', (_event, enabled) => {
   try {
-    const opts = { openAtLogin: !!enabled };
-    if (!app.isPackaged) {
-      opts.path = process.execPath;
-      opts.args = [app.getAppPath()];
-    }
+    const opts = loginItemOptions(!!enabled);
     app.setLoginItemSettings(opts);
-    return app.getLoginItemSettings().openAtLogin;
-  } catch {
-    return false;
+    const actual = app.getLoginItemSettings(opts);
+    return { ok: !!actual.openAtLogin === !!enabled, enabled: !!actual.openAtLogin, path: opts.path || process.execPath };
+  } catch (err) {
+    return { ok: false, enabled: false, error: String(err && err.message || err) };
   }
 });
 
 ipcMain.handle('app:get-login-item', () => {
   try {
-    return app.getLoginItemSettings().openAtLogin;
-  } catch {
-    return false;
+    const opts = loginItemOptions(true);
+    const actual = app.getLoginItemSettings(opts);
+    return { enabled: !!actual.openAtLogin, path: opts.path || process.execPath };
+  } catch (err) {
+    return { enabled: false, path: '', error: String(err && err.message || err) };
   }
 });
 

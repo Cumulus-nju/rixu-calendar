@@ -89,7 +89,7 @@
   let lastAIErrorAt = 0;
   let aiKeyAvailable = false;
   let aiTesting = false;
-  let appVersion = '0.4.1';
+  let appVersion = '0.4.2';
   let reminderTimer = null;
   let napcatSyncedThisSession = false;
   let lastNapcatStatus = '';
@@ -681,9 +681,14 @@
   }
 
   function notifyDesktop(title, body) {
-    if (data.settings.notify && bridge.notify) {
-      bridge.notify({ title: title, body: body }).catch(function () {});
-    }
+    if (!data.settings.notify || !bridge.notify) return;
+    Promise.resolve(bridge.notify({ title: title, body: body })).then(function (ok) {
+      if (!ok) {
+        showToast({ title: title, body: body + '（系统通知不可用，先显示在这里）', timeout: 7000 });
+      }
+    }).catch(function () {
+      showToast({ title: title, body: body + '（系统通知不可用，先显示在这里）', timeout: 7000 });
+    });
   }
 
   function safeRender() {
@@ -1130,12 +1135,16 @@
       settingRow('高置信自动加入', '超过阈值的安排直接进入日历，其余留在待确认。', switchHTML('autoAdd', s.autoAdd)) +
       settingRow('自动加入阈值', '越低越积极，也越容易把不确定的消息放进来。', selectHTML('autoThreshold', s.autoThreshold, [['0.7', '70% · 积极'], ['0.82', '82% · 平衡'], ['0.9', '90% · 谨慎']])) +
       settingRow('关闭窗口后驻留托盘', '保证剪贴板采集不中断。托盘菜单可以随时暂停。', switchHTML('closeToTray', s.closeToTray)) +
-      settingRow('开机自启', '登录 Windows 后在后台启动日序。', switchHTML('openAtLogin', s.openAtLogin)) +
       '</div></section>' +
 
-      '<section class="settings-section"><div class="section-head"><h2>提醒</h2><p>在日程开始前用系统通知提醒你。</p></div><div class="settings-body">' +
+      '<section class="settings-section"><div class="section-head"><h2>启动</h2><p>开机后在托盘里静默运行，不弹窗口；这样日程提醒不会因为忘了打开日序而漏掉。</p></div><div class="settings-body">' +
+      settingRow('开机自启', '登录 Windows 后在后台静默启动日序，只留任务栏托盘。', switchHTML('openAtLogin', s.openAtLogin)) +
+      '</div></section>' +
+
+      '<section class="settings-section"><div class="section-head"><h2>提醒</h2><p>在日程开始前用系统通知提醒你；关闭窗口、驻留托盘时也会提醒。</p></div><div class="settings-body">' +
       settingRow('系统通知', '关闭后仍会出现在日历，但不弹通知。', switchHTML('notify', s.notify)) +
-      settingRow('提前提醒', '只对未来的日程生效。', selectHTML('reminderMinutes', s.reminderMinutes, [['0', '开始时'], ['5', '5 分钟前'], ['10', '10 分钟前'], ['15', '15 分钟前'], ['30', '30 分钟前']])) +
+      settingRow('提前提醒', '只对未来的日程生效；修改日程时间后会重新计算。', selectHTML('reminderMinutes', s.reminderMinutes, [['0', '开始时'], ['1', '1 分钟前'], ['3', '3 分钟前'], ['5', '5 分钟前'], ['10', '10 分钟前'], ['15', '15 分钟前'], ['20', '20 分钟前'], ['30', '30 分钟前'], ['60', '1 小时前']])) +
+      settingRow('测试提醒', '先确认 Windows 没有把日序的通知关掉。', '<button class="btn-ghost" data-action="test-reminder">发送测试通知</button>') +
       '</div></section>' +
 
       '<section class="settings-section"><div class="section-head"><h2>实时接入</h2><p>可选。NapCat 的 OneBot WebSocket 能真正实时收到 QQ 消息。</p></div><div class="settings-body">' +
@@ -2802,6 +2811,9 @@
       case 'test-ai':
         testAI();
         break;
+      case 'test-reminder':
+        testReminder();
+        break;
       case 'open-data':
         if (!IS_DESKTOP) { showToast({ title: '浏览器预览', body: '数据保存在 localStorage。', timeout: 3000 }); break; }
         bridge.openDataFolder().then((result) => {
@@ -2881,6 +2893,26 @@
     const day = Math.min(parseInt(selectedDate.slice(8, 10), 10) || 1, daysInMonth(d));
     selectedDate = dateKey(new Date(d.getFullYear(), d.getMonth(), day));
     render();
+  }
+
+  async function testReminder() {
+    if (!IS_DESKTOP) {
+      showToast({ type: 'error', title: '浏览器预览不支持系统通知', body: '请用桌面版。' });
+      return;
+    }
+    try {
+      const ok = await bridge.notify({
+        title: '日序提醒测试',
+        body: '如果你看到这条通知，说明系统通知正常。日程到点前会这样提醒你。'
+      });
+      if (ok) {
+        showToast({ title: '测试通知已发送', body: '没看到的话，检查 Windows 通知设置或「专注助手」。', timeout: 5000 });
+      } else {
+        showToast({ type: 'error', title: '系统通知不可用', body: 'Windows 可能把日序的通知关掉了。', timeout: 5000 });
+      }
+    } catch (err) {
+      showToast({ type: 'error', title: '测试通知失败', body: String(err && err.message || err) });
+    }
   }
 
   async function testAI() {
@@ -3350,6 +3382,16 @@
     }
     if (IS_DESKTOP && bridge.aiAvailable) {
       try { aiKeyAvailable = !!(await bridge.aiAvailable()); } catch { aiKeyAvailable = false; }
+    }
+    if (IS_DESKTOP && bridge.getLoginItem) {
+      try {
+        const info = await bridge.getLoginItem();
+        const actual = info && typeof info === 'object' ? !!info.enabled : !!info;
+        if (actual !== !!data.settings.openAtLogin) {
+          data.settings.openAtLogin = actual;
+          saveSoon();
+        }
+      } catch { /* ignore */ }
     }
     if (IS_DESKTOP && bridge.syncStatus) {
       try { syncStatus = Object.assign(syncStatus, await bridge.syncStatus()); } catch { /* ignore */ }
