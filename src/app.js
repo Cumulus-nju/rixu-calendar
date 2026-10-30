@@ -49,6 +49,13 @@
     async syncSignUp() { return { ok: false, error: '浏览器预览不支持同步，请用桌面版。' }; },
     async syncSignOut() { return { ok: false, error: '浏览器预览不支持同步，请用桌面版。' }; },
     async syncNow() { return { ok: false, error: '浏览器预览不支持同步，请用桌面版。' }; },
+    async folderStatus() { return { configured: false, enabled: false, syncing: false, folder: '', lastSyncAt: '', lastError: '' }; },
+    async folderDetect() { return []; },
+    async folderPick() { return { ok: false, error: '浏览器预览不能选文件夹，请用桌面版。' }; },
+    async folderConfigure() { return { ok: false, error: '浏览器预览不支持同步文件夹，请用桌面版。' }; },
+    async folderDisable() { return { ok: false, status: { configured: false, enabled: false } }; },
+    async folderNow() { return { ok: false, error: '浏览器预览不支持同步文件夹，请用桌面版。' }; },
+    async folderOpen() { return '仅桌面版可用'; },
     onCapture() { return function () {}; },
     onCaptureState() { return function () {}; },
     onManualCapture() { return function () {}; },
@@ -56,7 +63,9 @@
     onNapcatSources() { return function () {}; },
     onNapcatMessage() { return function () {}; },
     onSyncStatus() { return function () {}; },
-    onSyncApplied() { return function () {}; }
+    onSyncApplied() { return function () {}; },
+    onFolderStatus() { return function () {}; },
+    onFolderApplied() { return function () {}; }
   };
 
   const bridge = IS_DESKTOP ? window.rixu : FALLBACK_BRIDGE;
@@ -80,7 +89,7 @@
   let lastAIErrorAt = 0;
   let aiKeyAvailable = false;
   let aiTesting = false;
-  let appVersion = '0.3.0';
+  let appVersion = '0.4.0';
   let reminderTimer = null;
   let napcatSyncedThisSession = false;
   let lastNapcatStatus = '';
@@ -90,6 +99,10 @@
   let syncEditingServer = false;
   let syncPendingData = null;
   let lastImportedId = '';
+  let folderSync = { configured: false, enabled: false, folder: '', syncing: false, lastSyncAt: '', lastError: '', calendarId: '' };
+  let folderBusy = false;
+  let folderSuggestions = [];
+  let folderPendingSummary = null;
 
   const ICONS = {
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/>',
@@ -1038,10 +1051,42 @@
     return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;
   }
 
+  function folderSectionHTML() {
+    const st = folderSync || {};
+    const supabaseSignedIn = !!(syncStatus && syncStatus.signedIn);
+    if (!st.configured) {
+      const suggestions = Array.isArray(folderSuggestions) ? folderSuggestions : [];
+      return '<div class="llm-box folder-box"><p class="folder-lead">把日程放进 OneDrive / 坚果云 的同步文件夹，两台电脑选同一个文件夹就行。不用账号，也不经过日序的服务器。</p>' +
+        (suggestions.length ? '<div class="folder-suggestions">' + suggestions.map((item) =>
+          '<button class="btn-ghost" data-action="folder-use" data-path="' + esc(item.path) + '" ' + (supabaseSignedIn ? 'disabled' : '') + '>' +
+          icon('folder', 12) + ' 使用 ' + esc(item.label) + '</button>'
+        ).join('') + '</div>' : '') +
+        '<div class="settings-actions"><button class="btn-ghost" data-action="folder-pick" ' + (supabaseSignedIn ? 'disabled' : '') + '>' + icon('folder', 12) + ' 选择文件夹…</button></div>' +
+        (supabaseSignedIn ? '<p class="llm-note warn">当前已登录 Supabase。两种同步方式二选一：先退出 Supabase，再启用文件夹同步。</p>' : '') +
+        '<p class="llm-note">文件夹里会生成 <code>rixu-sync.json</code>（明文 JSON）。API Key 和 NapCat Token 不会写进去；云盘服务商能看到这个文件。建议单独建一个「日序」文件夹。</p></div>';
+    }
+    const enabled = !!st.enabled;
+    const canSync = enabled && !st.syncing && !folderBusy;
+    return '<div class="setting-row"><div class="setting-copy"><div class="setting-label">' + (enabled ? '已启用' : '已停用') + ' · <span class="folder-path">' + esc(st.folder) + '</span></div>' +
+      '<div class="setting-desc">同步文件 rixu-sync.json' + (st.calendarId ? ' · 日历 ' + esc(String(st.calendarId).slice(0, 8)) : '') + '</div></div>' +
+      '<div class="settings-actions"><button class="btn-ghost" data-action="folder-now" ' + (canSync ? '' : 'disabled') + '>' + (st.syncing ? '同步中…' : '立即同步') + '</button>' +
+      '<button class="btn-text" data-action="folder-change">更换</button></div></div>' +
+      '<div class="setting-row"><div class="setting-copy"><div class="setting-label">上次同步</div><div class="setting-desc">' +
+      (st.lastSyncAt ? esc(formatSyncTime(st.lastSyncAt)) : '还没同步过') +
+      (st.lastError ? ' · <span style="color:var(--accent)">' + esc(st.lastError) + '</span>' : '') + '</div></div>' +
+      '<div class="settings-actions"><button class="btn-text" data-action="folder-open">打开文件夹</button>' + (enabled
+        ? '<button class="btn-text" data-action="folder-disable">停用</button>'
+        : '<button class="btn-ghost" data-action="folder-enable">重新启用</button>') + '</div></div>' +
+      '<p class="llm-note">' + (enabled ? '每 30 秒、以及本地改动后约 5 秒自动同步。' : '同步已暂停；日程仍会正常保存在本机。') +
+      ' 两台电脑指向同一个文件夹即可；云盘冲突副本会自动合并，并改名为 .merged 保留。</p>';
+  }
+
   function syncSectionHTML() {
     const st = syncStatus || {};
+    const folderOn = !!(folderSync && folderSync.configured && folderSync.enabled);
+    const folderNote = folderOn ? '<p class="llm-note warn">同步文件夹已启用，Supabase 自动同步暂停。要用 Supabase，请先把上面的同步文件夹停用。</p>' : '';
     if (!st.configured || syncEditingServer) {
-      return '<div class="llm-box"><div class="field-grid">' +
+      return folderNote + '<div class="llm-box"><div class="field-grid">' +
         '<label class="field"><span>Supabase 地址</span><input class="text-input" id="sync-url" placeholder="https://xxxx.supabase.co" value="' + esc(st.url || '') + '"></label>' +
         '<label class="field"><span>anon key（公开密钥）</span><input class="text-input" type="password" id="sync-anon-key" placeholder="eyJhbGciOi..."></label>' +
         '</div>' +
@@ -1050,7 +1095,7 @@
         '<p class="llm-note">在 Supabase 建一个免费项目 → 执行项目里的 <code>supabase/schema.sql</code> → 把 Project URL 和 anon public key 填进来。步骤见 <code>docs/同步设置.md</code>。anon key 是公开密钥，真正的隔离靠数据库的 RLS。</p></div>';
     }
     if (!st.signedIn) {
-      return '<div class="setting-row"><div class="setting-copy"><div class="setting-label">服务器</div><div class="setting-desc">' + esc(st.url) + '</div></div>' +
+      return folderNote + '<div class="setting-row"><div class="setting-copy"><div class="setting-label">服务器</div><div class="setting-desc">' + esc(st.url) + '</div></div>' +
         '<div class="settings-actions"><button class="btn-text" data-action="sync-change-server">换一个</button></div></div>' +
         '<div class="llm-box"><div class="field-grid">' +
         '<label class="field"><span>邮箱</span><input class="text-input" id="sync-email" type="email" placeholder="you@example.com" autocomplete="username"></label>' +
@@ -1059,13 +1104,13 @@
         '<button class="btn-ghost" data-action="sync-signup" ' + (syncBusy ? 'disabled' : '') + '>注册新账号</button></div>' +
         '<p class="llm-note">第一次用先注册。Supabase 默认要你去邮箱点确认链接，确认后再回来登录。</p></div>';
     }
-    return '<div class="setting-row"><div class="setting-copy"><div class="setting-label">已登录</div><div class="setting-desc">' + esc(st.email || '') + ' · ' + esc(st.url || '') + '</div></div>' +
+    return folderNote + '<div class="setting-row"><div class="setting-copy"><div class="setting-label">已登录</div><div class="setting-desc">' + esc(st.email || '') + ' · ' + esc(st.url || '') + '</div></div>' +
       '<div class="settings-actions"><button class="btn-ghost" data-action="sync-now" ' + (st.syncing || syncBusy ? 'disabled' : '') + '>' + (st.syncing ? '同步中…' : '立即同步') + '</button>' +
       '<button class="btn-text" data-action="sync-signout">退出</button></div></div>' +
       '<div class="setting-row"><div class="setting-copy"><div class="setting-label">上次同步</div><div class="setting-desc">' +
       (st.lastSyncAt ? esc(formatSyncTime(st.lastSyncAt)) : '还没同步过') +
       (st.lastError ? ' · <span style="color:var(--accent)">' + esc(st.lastError) + '</span>' : '') + '</div></div></div>' +
-      '<p class="llm-note">只上传日程、来源和偏好设置。API Key、NapCat Token 永远不上传；这台电脑的「开机自启 / 关窗驻留」也不会同步到别的机器。</p>';
+      '<p class="llm-note">只上传日程、来源、模板、周期定义和偏好设置。API Key、NapCat Token 永远不上传；这台电脑的「开机自启 / 关窗驻留」也不会同步到别的机器。</p>';
   }
 
   function settingsViewHTML() {
@@ -1112,7 +1157,11 @@
       '<div class="settings-actions"><button class="btn-ghost" data-action="load-demo">载入示例</button><button class="btn-danger" data-action="clear-data">清空全部</button></div></div>' +
       '</div></section>' +
 
-      '<section class="settings-section"><div class="section-head"><h2>账号与同步</h2><p>登录后，日程和来源会在这几台电脑之间自动同步；不登录时一切照旧，只存在本机。</p></div><div class="settings-body">' +
+      '<section class="settings-section"><div class="section-head"><h2>同步文件夹</h2><p>推荐给个人自用。选一个 OneDrive / 坚果云 文件夹，两台电脑指向同一个位置，不需要账号。</p></div><div class="settings-body">' +
+      folderSectionHTML() +
+      '</div></section>' +
+
+      '<section class="settings-section"><div class="section-head"><h2>账号与同步（高级）</h2><p>登录 Supabase 后，日程和来源会在这几台电脑之间自动同步；不登录时一切照旧，只存在本机。与上面的同步文件夹二选一。</p></div><div class="settings-body">' +
       syncSectionHTML() +
       '</div></section>' +
 
@@ -2530,6 +2579,7 @@
     if (!el) return;
     const action = el.getAttribute('data-action');
     const id = el.getAttribute('data-id');
+    const attrPath = el.getAttribute('data-path');
     switch (action) {
       case 'nav':
         view = el.getAttribute('data-view') || 'calendar';
@@ -2706,6 +2756,27 @@
       case 'sync-now':
         syncNowRun();
         break;
+      case 'folder-pick':
+        pickFolder();
+        break;
+      case 'folder-use':
+        if (attrPath) configureFolder(attrPath, false);
+        break;
+      case 'folder-now':
+        folderNowRun();
+        break;
+      case 'folder-disable':
+        folderDisableRun();
+        break;
+      case 'folder-enable':
+        if (folderSync.folder) configureFolder(folderSync.folder, false);
+        break;
+      case 'folder-change':
+        pickFolder();
+        break;
+      case 'folder-open':
+        folderOpenRun();
+        break;
       case 'save-napcat':
         applyNapcatConfig(true);
         break;
@@ -2874,6 +2945,125 @@
     render();
   }
 
+  /* ---------------- 同步文件夹 ---------------- */
+
+  async function configureFolder(folder, join) {
+    if (!IS_DESKTOP) {
+      showToast({ type: 'error', title: '浏览器预览不支持同步文件夹', body: '请用桌面版。' });
+      return;
+    }
+    if (folderBusy) return;
+    folderBusy = true;
+    try {
+      const result = await bridge.folderConfigure({ folder: folder, join: !!join });
+      if (result && result.status) folderSync = Object.assign({}, folderSync, result.status);
+      if (!result || !result.ok) {
+        folderBusy = false;
+        if (view === 'settings') render();
+        if (result && result.needsJoin) {
+          openModal({
+            type: 'confirm',
+            payload: {
+              title: '加入已有日历？',
+              message: '这个文件夹里已经有一个日序日历。加入会把本机日程合并进去；如果这不是你自己的文件夹，请取消并换一个空文件夹。',
+              confirm: 'folder-join',
+              id: folder,
+              label: '加入并同步'
+            }
+          });
+          return;
+        }
+        showToast({ type: 'error', title: '文件夹同步没有启用', body: (result && result.error) || '检查文件夹权限。' });
+        return;
+      }
+      const sync = (result && result.sync) || {};
+      if (sync && sync.ok) {
+        const summary = sync.summary || {};
+        showToast({
+          title: '同步文件夹已启用',
+          body: '已写入 rixu-sync.json · ' + (summary.pushed || 0) + ' 项上传 · ' + (summary.pulled || 0) + ' 项拉取',
+          timeout: 4400
+        });
+      } else {
+        showToast({
+          type: 'error',
+          title: '文件夹已设置，但首次同步失败',
+          body: (sync && sync.error) || '稍后会自动重试。',
+          timeout: 5200
+        });
+      }
+    } catch (err) {
+      showToast({ type: 'error', title: '文件夹同步没有启用', body: String(err && err.message || err) });
+    } finally {
+      folderBusy = false;
+      if (view === 'settings') render();
+    }
+  }
+
+  async function pickFolder() {
+    if (!IS_DESKTOP) {
+      showToast({ type: 'error', title: '浏览器预览不支持同步文件夹', body: '请用桌面版。' });
+      return;
+    }
+    if (folderBusy) return;
+    try {
+      const result = await bridge.folderPick();
+      if (!result || !result.ok) return;
+      await configureFolder(result.folder, false);
+    } catch (err) {
+      showToast({ type: 'error', title: '选择文件夹失败', body: String(err && err.message || err) });
+    }
+  }
+
+  async function folderNowRun() {
+    if (!IS_DESKTOP || folderBusy) return;
+    folderBusy = true;
+    folderSync = Object.assign({}, folderSync, { syncing: true });
+    if (view === 'settings') render();
+    try {
+      const result = await bridge.folderNow();
+      if (result && result.status) folderSync = Object.assign({}, folderSync, result.status);
+      if (!result || !result.ok) {
+        showToast({ type: 'error', title: '同步失败', body: (result && result.error) || '稍后再试。' });
+      } else {
+        const s = result.summary || {};
+        showToast({
+          title: '同步完成',
+          body: (s.pulled || 0) + ' 项更新 · ' + (s.pushed || 0) + ' 项写入' + (s.conflicts ? ' · 合并 ' + s.conflicts + ' 个冲突副本' : ''),
+          timeout: 3800
+        });
+      }
+    } catch (err) {
+      showToast({ type: 'error', title: '同步失败', body: String(err && err.message || err) });
+    } finally {
+      folderBusy = false;
+      folderSync = Object.assign({}, folderSync, { syncing: false });
+      if (view === 'settings') render();
+    }
+  }
+
+  async function folderDisableRun() {
+    if (!IS_DESKTOP) return;
+    try {
+      const result = await bridge.folderDisable();
+      if (result && result.status) folderSync = Object.assign({}, folderSync, result.status);
+      showToast({ title: '同步文件夹已停用', body: '本机日程不受影响。', timeout: 3200 });
+    } catch (err) {
+      showToast({ type: 'error', title: '停用失败', body: String(err && err.message || err) });
+    }
+    if (view === 'settings') render();
+  }
+
+  async function folderOpenRun() {
+    if (!IS_DESKTOP) return;
+    try {
+      const result = await bridge.folderOpen();
+      if (result) showToast({ type: 'error', title: '打不开文件夹', body: String(result) });
+    } catch (err) {
+      showToast({ type: 'error', title: '打不开文件夹', body: String(err && err.message || err) });
+    }
+  }
+
   async function syncConfigureRun() {
     if (syncBusy) return;
     const urlEl = document.getElementById('sync-url');
@@ -2978,7 +3168,9 @@
 
   function runConfirm(confirm, id) {
     if (!confirm) return;
-    if (confirm === 'delete-series') {
+    if (confirm === 'folder-join') {
+      if (id) configureFolder(id, true);
+    } else if (confirm === 'delete-series') {
       if (id) endSeries(id);
     } else if (confirm === 'clear-data' || confirm === 'clear-demo') {
       const settings = clone(data.settings);
@@ -3127,6 +3319,12 @@
     if (IS_DESKTOP && bridge.syncStatus) {
       try { syncStatus = Object.assign(syncStatus, await bridge.syncStatus()); } catch { /* ignore */ }
     }
+    if (IS_DESKTOP && bridge.folderStatus) {
+      try { folderSync = Object.assign(folderSync, await bridge.folderStatus()); } catch { /* ignore */ }
+    }
+    if (IS_DESKTOP && bridge.folderDetect) {
+      try { folderSuggestions = (await bridge.folderDetect()) || []; } catch { folderSuggestions = []; }
+    }
     if (IS_DESKTOP) {
       bridge.setCaptureEnabled(captureOn).catch(function () {});
       bridge.setCloseToTray(!!data.settings.closeToTray).catch(function () {});
@@ -3212,6 +3410,22 @@
       const summary = payload.summary || {};
       if (summary.pulled > 0) {
         showToast({ title: '已从其他设备同步', body: summary.pulled + ' 项更新。', timeout: 3400 });
+      }
+    });
+
+    bridge.onFolderStatus(function (status) {
+      if (!status) return;
+      folderSync = Object.assign({}, folderSync, status);
+      if (view === 'settings') safeRender();
+    });
+
+    bridge.onFolderApplied(function (payload) {
+      if (!payload || !payload.data || demoPreview) return;
+      if (modalState) { syncPendingData = payload.data; return; }
+      applySyncedData(payload.data);
+      const summary = payload.summary || {};
+      if (summary.pulled > 0) {
+        showToast({ title: '已从同步文件夹更新', body: summary.pulled + ' 项更新。', timeout: 3400 });
       }
     });
 

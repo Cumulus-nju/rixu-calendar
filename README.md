@@ -15,7 +15,7 @@
 - **来源分级**：重要 / 普通 / 待归类 / 忽略。忽略和待归类的会话不保存正文、不发送给 AI。
 - **快捷导入**：把常做的事存成模板（标题、时间、时长、地点、来源），群里一布置，点一下「导入」就进日历；也可以临时改日期。
 - **周期性日程**：组会、例会这类在一段时间里每周都有的安排，选好星期和结束日期，日序一次把整段排进日历。
-- **本地优先**：所有日程数据只存在你自己的电脑上；想跨设备可以自行接 Supabase 同步。
+- **本地优先**：所有日程数据默认只存在你自己的电脑上；想跨设备可以用同步文件夹（OneDrive / 坚果云），或自建 Supabase。
 - **可选实时接入**：配置 NapCat（OneBot 11）后可直接接收 QQ 群消息，默认关闭。
 
 ![待确认](docs/inbox.png)
@@ -116,12 +116,30 @@ Key 只保存在本机数据文件里（`%APPDATA%\rixu-calendar\data.json`）�
 
 ## 多设备同步（可选）
 
-日序默认只把日程存在本机。想在家里和办公室电脑之间用同一份日历，可以在
-**设置 → 账号与同步** 接一个免费的 Supabase 项目：登录后，日程、来源、模板、周期定义和偏好设置会自动双向同步。
+日序默认只把日程存在本机。想在家里和办公室电脑之间用同一份日历，有两种方式：
+
+### 同步文件夹（推荐，零账号）
+
+把日历写进你已有的 OneDrive / 坚果云同步文件夹，两台电脑指向同一个文件夹：
+
+1. 第一台电脑：**设置 → 同步文件夹** → 选一个同步盘文件夹（建议单独建「日序」）。
+2. 第二台电脑：选到同一个文件夹 → 确认 **「加入已有日历」**。
+3. 之后每 30 秒、以及本地改动后约 5 秒自动合并；也可以手动「立即同步」。
+
+- 不需要账号、不经过日序的服务器；数据只经过你自己的云盘。
+- 只同步日程、来源、模板、周期和偏好；**API Key 和 NapCat Token 不会写进同步文件**。
+- 云盘生成的冲突副本会自动合并，改名为 `.merged` 保留。
+- 完整步骤、冲突规则和 FAQ 见 [`docs/同步文件夹.md`](docs/同步文件夹.md)。
+
+### Supabase（高级，自建服务器）
+
+想用真正的账号登录、换电脑只输邮箱密码，可以接一个免费的 Supabase 项目：
+登录后，日程、来源、模板、周期定义和偏好设置会自动双向同步。
 
 - 只上传跟设备无关的数据；**API Key 和 NapCat Token 永远不上传**。
 - 单机设置（开机自启、关窗驻留）不会同步到别的电脑。
 - 完整步骤（建项目、跑 SQL、第二台登录）见 [`docs/同步设置.md`](docs/同步设置.md)。
+- 两种同步方式**二选一**：启用同步文件夹时，Supabase 自动同步暂停。
 
 
 ![设置](docs/settings.png)
@@ -190,13 +208,18 @@ src/parser.js              本地中文日程解析器（无依赖）
 src/recurrence.js          周期展开（纯函数：星期 / 间隔 / 结束日期 / 例外）
 src/sync-core.js           同步差异、指纹与远端合并
 src/sync-net.js            Supabase Auth + PostgREST
-src/sync-engine.js         同步编排（首同步保护、墓碑、登录态）
+src/sync-engine.js         Supabase 同步编排（首同步保护、墓碑、登录态）
+src/folder-sync-core.js    同步文件夹快照合并（纯函数）
+src/folder-sync-engine.js  同步文件夹读写、冲突副本与合并编排
 supabase/schema.sql        同步表结构与 RLS
 docs/同步设置.md            从建 Supabase 项目到第二台电脑登录
+docs/同步文件夹.md          OneDrive / 坚果云同步文件夹的完整说明
 test/parser.test.js        解析器单元测试
 test/recurrence.test.js    周期展开单元测试
 test/sync-core.test.js     同步核心单元测试
 test/sync-engine.test.js   假 Supabase 端到端测试
+test/folder-sync-core.test.js    文件夹快照合并单元测试
+test/folder-sync-engine.test.js  文件夹同步端到端测试
 tools/create-shortcut.ps1  重建桌面快捷方式
 tools/mock-ai.js           本地 mock AI 服务（开发用）
 tools/mock-onebot.js       本地 mock OneBot 服务（开发用）
@@ -222,6 +245,7 @@ npm run dist        # 打包 Windows 免安装 exe 到 release/
 - 解析器是本地规则引擎；AI 默认作为首选识别层，失败时自动回退。
 - macOS / Linux 没有剪贴板序号，复制同一段文字不会再次触发识别；Windows 不受影响。
 - 周期日程会展开成独立日程，最多 200 次、跨度最长两年；不支持「跳过法定节假日」这类复杂规则。
+- 同步文件夹依赖 OneDrive / 坚果云等客户端，不是实时同步；同一个文件夹只放一套日历，同一条目并发修改按更新时间较新者赢。
 - 下载包是未签名的 Windows 免安装 exe，首次运行可能触发 SmartScreen 提示。
 
 ## 贡献

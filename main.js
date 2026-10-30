@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const WebSocket = require('ws');
 const Parser = require('./src/parser');
 const { SyncEngine } = require('./src/sync-engine');
+const { FolderSyncEngine } = require('./src/folder-sync-engine');
 
 const APP_NAME = '日序';
 const isScreenshot = process.argv.includes('--screenshot');
@@ -117,6 +118,71 @@ const syncEngine = new SyncEngine({
   }
 });
 
+/* ---------------- 同步文件夹（零账号） ---------------- */
+
+function folderSyncStateFile() {
+  return path.join(app.getPath('userData'), 'folder-sync-state.json');
+}
+
+function readFolderSyncStateFile() {
+  try {
+    const file = folderSyncStateFile();
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\ufeff/, ''));
+  } catch (err) {
+    console.error('read folder sync state failed', err);
+    return null;
+  }
+}
+
+function writeFolderSyncStateFile(state) {
+  const file = folderSyncStateFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+const folderSyncEngine = new FolderSyncEngine({
+  readData: readData,
+  writeData: writeData,
+  dataExists: () => fs.existsSync(dataFile()),
+  readState: readFolderSyncStateFile,
+  writeState: writeFolderSyncStateFile,
+  log: function () {
+    const args = Array.prototype.slice.call(arguments);
+    console.warn.apply(console, ['[folder-sync]'].concat(args));
+  },
+  onApplied: function (data, summary) {
+    sendToRenderer('folder-sync:applied', { data: data, summary: summary });
+  }
+});
+
+function folderSyncEnabled() {
+  const status = folderSyncEngine.status();
+  return !!(status.configured && status.enabled);
+}
+
+function folderSuggestions() {
+  const home = os.homedir();
+  const out = [];
+  const oneDrive = process.env.OneDrive || process.env.OneDriveConsumer || process.env.OneDriveCommercial;
+  if (oneDrive && fs.existsSync(oneDrive)) out.push({ label: 'OneDrive', path: path.join(oneDrive, '日序') });
+  const nutstore = [
+    path.join(home, 'Nutstore', '我的坚果云'),
+    path.join(home, 'Nutstore Files', '我的坚果云'),
+    path.join(home, '坚果云')
+  ].find((candidate) => fs.existsSync(candidate));
+  if (nutstore) out.push({ label: '坚果云', path: path.join(nutstore, '日序') });
+  const seen = new Set();
+  return out.filter((item) => {
+    const key = item.path.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 const SYNC_INTERVAL_MS = 60000;
 const SYNC_STARTUP_DELAY_MS = 6000;
 const SYNC_AFTER_SAVE_MS = 8000;
@@ -126,7 +192,7 @@ let syncStartupTimer = null;
 
 function syncAutoEnabled() {
   const status = syncEngine.status();
-  return !!(status.configured && status.signedIn);
+  return !!(status.configured && status.signedIn) && !folderSyncEnabled();
 }
 
 function runSync(reason) {
@@ -158,6 +224,51 @@ function stopSyncLoop() {
   if (syncIntervalTimer) { clearInterval(syncIntervalTimer); syncIntervalTimer = null; }
   if (syncStartupTimer) { clearTimeout(syncStartupTimer); syncStartupTimer = null; }
   if (syncSaveTimer) { clearTimeout(syncSaveTimer); syncSaveTimer = null; }
+}
+
+/* ---------------- 同步文件夹定时器 ---------------- */
+
+const FOLDER_SYNC_INTERVAL_MS = 30000;
+const FOLDER_SYNC_STARTUP_DELAY_MS = 7000;
+const FOLDER_SYNC_AFTER_SAVE_MS = 5000;
+let folderSyncIntervalTimer = null;
+let folderSyncSaveTimer = null;
+let folderSyncStartupTimer = null;
+
+function runFolderSync(reason) {
+  if (!folderSyncEnabled() || folderSyncEngine.syncing) return Promise.resolve(null);
+  // 登录了 Supabase 就不再自动跑文件夹同步，两种方式二选一。
+  if (syncEngine.status().signedIn) return Promise.resolve(null);
+  return folderSyncEngine.syncNow(reason).then((result) => {
+    sendToRenderer('folder-sync:status', folderSyncEngine.status());
+    return result;
+  }).catch(() => null);
+}
+
+function scheduleFolderSyncAfterSave() {
+  if (!folderSyncEnabled()) return;
+  if (syncEngine.status().signedIn) return;
+  if (folderSyncSaveTimer) clearTimeout(folderSyncSaveTimer);
+  folderSyncSaveTimer = setTimeout(() => {
+    folderSyncSaveTimer = null;
+    runFolderSync('local-change');
+  }, FOLDER_SYNC_AFTER_SAVE_MS);
+}
+
+function startFolderSyncLoop() {
+  if (folderSyncIntervalTimer) clearInterval(folderSyncIntervalTimer);
+  folderSyncIntervalTimer = setInterval(() => { runFolderSync('timer'); }, FOLDER_SYNC_INTERVAL_MS);
+  if (folderSyncStartupTimer) clearTimeout(folderSyncStartupTimer);
+  folderSyncStartupTimer = setTimeout(() => {
+    folderSyncStartupTimer = null;
+    runFolderSync('startup');
+  }, FOLDER_SYNC_STARTUP_DELAY_MS);
+}
+
+function stopFolderSyncLoop() {
+  if (folderSyncIntervalTimer) { clearInterval(folderSyncIntervalTimer); folderSyncIntervalTimer = null; }
+  if (folderSyncStartupTimer) { clearTimeout(folderSyncStartupTimer); folderSyncStartupTimer = null; }
+  if (folderSyncSaveTimer) { clearTimeout(folderSyncSaveTimer); folderSyncSaveTimer = null; }
 }
 
 function safeReadClipboard() {
@@ -730,6 +841,7 @@ app.whenReady().then(() => {
   buildTray();
   startCapture();
   startSyncLoop();
+  startFolderSyncLoop();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -745,6 +857,7 @@ app.on('before-quit', () => {
   quitting = true;
   stopCapture();
   stopSyncLoop();
+  stopFolderSyncLoop();
   napcat.enabled = false;
   napcat.manualStop = true;
   closeNapcatSocket();
@@ -919,10 +1032,16 @@ ipcMain.handle('data:save', (_event, data) => {
   }
   const ok = writeData(data);
   scheduleSyncAfterSave();
+  scheduleFolderSyncAfterSave();
   return ok;
 });
 
 ipcMain.handle('sync:status', () => syncEngine.status());
+
+function supabaseBlockedByFolder() {
+  if (!folderSyncEnabled()) return null;
+  return { ok: false, error: '同步文件夹已启用。两种方式二选一：先停用同步文件夹，再使用 Supabase。' };
+}
 
 ipcMain.handle('sync:configure', async (_event, payload) => {
   const result = await syncEngine.configure(payload);
@@ -931,12 +1050,16 @@ ipcMain.handle('sync:configure', async (_event, payload) => {
 });
 
 ipcMain.handle('sync:signin', async (_event, payload) => {
+  const blocked = supabaseBlockedByFolder();
+  if (blocked) return blocked;
   const result = await syncEngine.signIn(payload);
   sendToRenderer('sync:status', syncEngine.status());
   return result;
 });
 
 ipcMain.handle('sync:signup', async (_event, payload) => {
+  const blocked = supabaseBlockedByFolder();
+  if (blocked) return blocked;
   const result = await syncEngine.signUp(payload);
   sendToRenderer('sync:status', syncEngine.status());
   return result;
@@ -949,9 +1072,64 @@ ipcMain.handle('sync:signout', () => {
 });
 
 ipcMain.handle('sync:now', async () => {
+  const blocked = supabaseBlockedByFolder();
+  if (blocked) return blocked;
   const result = await syncEngine.syncNow('manual');
   sendToRenderer('sync:status', syncEngine.status());
   return result;
+});
+
+/* ---------------- 同步文件夹 IPC ---------------- */
+
+ipcMain.handle('folder-sync:status', () => folderSyncEngine.status());
+
+ipcMain.handle('folder-sync:detect', () => folderSuggestions());
+
+ipcMain.handle('folder-sync:pick', async () => {
+  const suggestions = folderSuggestions();
+  const defaultPath = suggestions.length ? suggestions[0].path : app.getPath('documents');
+  const options = {
+    title: '选择同步文件夹（OneDrive / 坚果云 / 任意同步盘）',
+    defaultPath: defaultPath,
+    properties: ['openDirectory', 'createDirectory']
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+  return { ok: true, folder: result.filePaths[0] };
+});
+
+ipcMain.handle('folder-sync:configure', async (_event, payload) => {
+  if (syncEngine.status().signedIn) {
+    return { ok: false, error: '当前已登录 Supabase。先退出 Supabase，再启用同步文件夹（两种方式二选一）。' };
+  }
+  const folder = typeof payload === 'string' ? payload : (payload && payload.folder);
+  const join = !!(payload && typeof payload === 'object' && payload.join);
+  const result = await folderSyncEngine.configure(folder, { join: join });
+  sendToRenderer('folder-sync:status', folderSyncEngine.status());
+  return result;
+});
+
+ipcMain.handle('folder-sync:disable', () => {
+  const result = folderSyncEngine.disable();
+  sendToRenderer('folder-sync:status', result.status);
+  return result;
+});
+
+ipcMain.handle('folder-sync:now', async () => {
+  if (syncEngine.status().signedIn) {
+    return { ok: false, error: 'Supabase 已登录，文件夹同步已暂停。' };
+  }
+  const result = await folderSyncEngine.syncNow('manual');
+  sendToRenderer('folder-sync:status', folderSyncEngine.status());
+  return result;
+});
+
+ipcMain.handle('folder-sync:open', async () => {
+  const status = folderSyncEngine.status();
+  if (!status.folder) return '还没有选择同步文件夹。';
+  return shell.openPath(status.folder);
 });
 
 ipcMain.handle('capture:set-enabled', (_event, enabled) => setCapture(enabled));

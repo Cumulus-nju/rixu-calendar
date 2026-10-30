@@ -1989,6 +1989,38 @@ input, textarea, select {
   border: 0;
 }
 
+/* ---------------- folder sync ---------------- */
+
+.folder-box .folder-lead {
+  margin: 0 0 10px;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.folder-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 9px 0 2px;
+}
+
+.folder-suggestions .btn-ghost {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 9.5px;
+}
+
+.folder-path {
+  word-break: break-all;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.llm-note.warn {
+  color: var(--accent-deep);
+}
+
 /* ---------------- quick import ---------------- */
 
 .quick-head-actions {
